@@ -16,7 +16,7 @@ export async function POST(request: Request) {
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
         ...result.data,
-        _subject: `New De Vihelhana enquiry from ${result.data.name}`,
+        _subject: `New De Vilhena enquiry from ${result.data.name}`,
         _replyto: result.data.email,
         _template: "table",
       }),
