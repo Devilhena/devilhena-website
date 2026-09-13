@@ -1,0 +1,4 @@
+"use client";
+import { Minus, Plus, Trash2 } from "lucide-react";
+import { type CartLine, useCart } from "./CartProvider";
+export function QuantityControl({item}:{item:CartLine}){const{increase,decrease,remove}=useCart();return <div className="flex items-center gap-2"><div className="inline-flex items-center rounded-full border border-earth/20"><button className="focus-ring rounded-full p-1.5" onClick={()=>decrease(item.id)} aria-label={`Decrease ${item.name}`}><Minus size={14}/></button><span className="w-7 text-center text-xs font-semibold">{item.quantity}</span><button className="focus-ring rounded-full p-1.5" onClick={()=>increase(item.id)} aria-label={`Increase ${item.name}`}><Plus size={14}/></button></div><button className="focus-ring rounded-full p-2 text-earth/70 transition hover:bg-beige hover:text-forest" onClick={()=>remove(item.id)} aria-label={`Remove ${item.name}`}><Trash2 size={15}/></button></div>}
