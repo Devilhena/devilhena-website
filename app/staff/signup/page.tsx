@@ -1,0 +1,2 @@
+import { StaffSignupForm } from "@/components/staff/StaffSignupForm";
+export default function StaffSignupPage() { return <main className="min-h-screen px-5 pb-20 pt-32 lg:px-10"><div className="mx-auto max-w-md rounded-[2rem] border border-earth/15 bg-beige/45 p-7 sm:p-10"><p className="eyebrow">De Vilhena Bistrot</p><h1 className="mt-3 font-display text-4xl">Staff <i className="text-earth">registration.</i></h1><p className="mt-4 text-sm leading-7 text-forest/70">Create your staff account. Access begins only after owner approval.</p><StaffSignupForm /></div></main>; }

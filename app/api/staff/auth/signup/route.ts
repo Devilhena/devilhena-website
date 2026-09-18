@@ -1,0 +1,15 @@
+import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+import { allowAuthAttempt } from "@/lib/auth-rate-limit";
+import { AuthError, createPendingStaffUser, validateNewPassword } from "@/lib/staff-auth";
+
+const signupSchema = z.object({ fullName: z.string().trim().min(2).max(120), email: z.string().email().max(200), password: z.string().min(10).max(200), confirmPassword: z.string().min(1).max(200) });
+export async function POST(request: NextRequest) {
+  if (!allowAuthAttempt("staff-signup", request.headers.get("x-forwarded-for"))) return NextResponse.json({ error: "Too many attempts. Please try again later." }, { status: 429 });
+  const parsed = signupSchema.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: "Enter a valid name, email, and password." }, { status: 400 });
+  if (parsed.data.password !== parsed.data.confirmPassword) return NextResponse.json({ error: "Passwords do not match." }, { status: 400 });
+  if (!validateNewPassword(parsed.data.password)) return NextResponse.json({ error: "Use at least 10 characters, including uppercase, lowercase, and a number." }, { status: 400 });
+  try { await createPendingStaffUser(parsed.data.fullName, parsed.data.email, parsed.data.password); return NextResponse.json({ ok: true }, { status: 201 }); }
+  catch (error) { if (error instanceof AuthError) return NextResponse.json({ error: error.message }, { status: error.statusCode }); return NextResponse.json({ error: "Registration is unavailable. Please try again later." }, { status: 503 }); }
+}

@@ -1,0 +1,11 @@
+import { randomUUID } from "node:crypto";
+import { neon } from "@neondatabase/serverless";
+import { hash } from "bcryptjs";
+const { DATABASE_URL, ADMIN_BOOTSTRAP_NAME, ADMIN_BOOTSTRAP_EMAIL, ADMIN_BOOTSTRAP_PASSWORD } = process.env;
+if (!DATABASE_URL || !ADMIN_BOOTSTRAP_NAME || !ADMIN_BOOTSTRAP_EMAIL || !ADMIN_BOOTSTRAP_PASSWORD) throw new Error("DATABASE_URL, ADMIN_BOOTSTRAP_NAME, ADMIN_BOOTSTRAP_EMAIL, and ADMIN_BOOTSTRAP_PASSWORD are required.");
+if (ADMIN_BOOTSTRAP_PASSWORD.length < 10 || !/[a-z]/.test(ADMIN_BOOTSTRAP_PASSWORD) || !/[A-Z]/.test(ADMIN_BOOTSTRAP_PASSWORD) || !/\d/.test(ADMIN_BOOTSTRAP_PASSWORD)) throw new Error("ADMIN_BOOTSTRAP_PASSWORD must contain at least 10 characters, uppercase, lowercase, and a number.");
+const sql = neon(DATABASE_URL); const admins = await sql`SELECT id FROM staff_users WHERE role = 'ADMIN' LIMIT 1`;
+if (admins.length) throw new Error("An ADMIN account already exists. Bootstrap stopped without making changes.");
+const id = randomUUID(); const passwordHash = await hash(ADMIN_BOOTSTRAP_PASSWORD, 12);
+await sql`INSERT INTO staff_users (id, full_name, email, password_hash, role, account_status, approved_at) VALUES (${id}, ${ADMIN_BOOTSTRAP_NAME.trim()}, ${ADMIN_BOOTSTRAP_EMAIL.trim().toLowerCase()}, ${passwordHash}, 'ADMIN', 'APPROVED', NOW())`;
+console.log("Initial ADMIN account created successfully.");
