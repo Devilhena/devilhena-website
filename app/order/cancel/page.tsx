@@ -1,0 +1,3 @@
+import Link from "next/link";
+
+export default function CancelPage() { return <main className="min-h-screen px-5 pb-20 pt-32"><div className="mx-auto max-w-xl rounded-[2rem] bg-beige/45 p-8 text-center"><p className="eyebrow">Payment cancelled</p><h1 className="mt-3 font-display text-4xl">Your cart is still saved.</h1><p className="mt-5 text-sm leading-7 text-forest/70">No payment was taken. You can return to checkout whenever you are ready.</p><Link href="/checkout" className="focus-ring mt-7 inline-flex rounded-full bg-forest px-5 py-3 text-xs font-semibold tracking-[.15em] text-cream">RETURN TO CHECKOUT</Link></div></main>; }
