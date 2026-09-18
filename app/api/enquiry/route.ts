@@ -1,10 +1,12 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { enquirySchema } from "@/lib/validation";
+import { enforceRateLimit, trustedClientIp } from "@/lib/rate-limit";
 
 const recipient = "devilhena206@gmail.com";
 
-export async function POST(request: Request) {
-  const result = enquirySchema.safeParse(await request.json());
+export async function POST(request: NextRequest) {
+  try { if (!(await enforceRateLimit("enquiry", [{ name: "ip", value: trustedClientIp(request), limit: 8, windowSeconds: 900 }]))) return NextResponse.json({ error: "Too many enquiries. Please try again later." }, { status: 429 }); } catch { return NextResponse.json({ error: "Enquiries are temporarily unavailable." }, { status: 503 }); }
+  const result = enquirySchema.safeParse(await request.json().catch(() => null));
 
   if (!result.success) {
     return NextResponse.json({ error: "Invalid enquiry" }, { status: 400 });
