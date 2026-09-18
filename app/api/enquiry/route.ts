@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { enquirySchema } from "@/lib/validation";
 import { enforceRateLimit, trustedClientIp } from "@/lib/rate-limit";
+import { logServerFailure } from "@/lib/safe-server-log";
 
 const recipient = "devilhena206@gmail.com";
 
 export async function POST(request: NextRequest) {
-  try { if (!(await enforceRateLimit("enquiry", [{ name: "ip", value: trustedClientIp(request), limit: 8, windowSeconds: 900 }]))) return NextResponse.json({ error: "Too many enquiries. Please try again later." }, { status: 429 }); } catch { return NextResponse.json({ error: "Enquiries are temporarily unavailable." }, { status: 503 }); }
+  try { if (!(await enforceRateLimit("enquiry", [{ name: "ip", value: trustedClientIp(request), limit: 8, windowSeconds: 900 }]))) return NextResponse.json({ error: "Too many enquiries. Please try again later." }, { status: 429 }); } catch (error) { logServerFailure("enquiry.rate-limit", error); return NextResponse.json({ error: "Enquiries are temporarily unavailable." }, { status: 503 }); }
   const result = enquirySchema.safeParse(await request.json().catch(() => null));
 
   if (!result.success) {
@@ -30,10 +31,11 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({ success: true }, { status: 201 });
-  } catch {
+  } catch (error) {
+    logServerFailure("enquiry.delivery", error);
     return NextResponse.json(
-      { error: "Unable to send enquiry" },
-      { status: 502 },
+      { error: "Unable to send your enquiry. Please try again later." },
+      { status: 503 },
     );
   }
 }

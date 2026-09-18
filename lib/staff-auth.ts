@@ -28,11 +28,8 @@ export async function createPendingStaffUser(fullName: string, email: string, pa
 export class AuthError extends Error { constructor(message: string, readonly statusCode: number) { super(message); } }
 export async function authenticateUser(email: string, password: string, requiredRole?: UserRole) {
   const sql = getDatabase(); const normalizedEmail = email.trim().toLowerCase(); const rows = await sql`SELECT id, full_name, email, password_hash, role, account_status, created_at, approved_at FROM staff_users WHERE email = ${normalizedEmail} LIMIT 1` as UserRow[]; const row = rows[0];
-  if (!row || !(await compare(password, row.password_hash))) throw new AuthError("Incorrect email or password.", 401);
-  if (row.account_status === "PENDING") throw new AuthError("Your account is awaiting administrator approval.", 403);
-  if (row.account_status === "REJECTED") throw new AuthError("Your account has not been approved. Please contact the administrator.", 403);
-  if (row.account_status === "DISABLED") throw new AuthError("Your account has been disabled. Please contact the administrator.", 403);
-  if (requiredRole && row.role !== requiredRole) throw new AuthError("This login is restricted to administrators.", 403);
+  if (!row || !(await compare(password, row.password_hash))) throw new AuthError("Unable to sign in with those details.", 401);
+  if (row.account_status !== "APPROVED" || (requiredRole && row.role !== requiredRole)) throw new AuthError("Unable to sign in with those details.", 401);
   return serializeUser(row);
 }
 export async function getAuthenticatedUser() {

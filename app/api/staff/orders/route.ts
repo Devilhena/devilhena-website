@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireStaffUser } from "@/lib/staff-auth";
 import { getNewPaidOrderIds, getStaffSummary, listStaffOrders, restaurantStatuses, type RestaurantStatus, type StaffPaymentStatus } from "@/lib/staff-orders";
+import { logServerFailure } from "@/lib/safe-server-log";
 
 const paymentStatuses: StaffPaymentStatus[] = ["PENDING", "PAID"];
 
@@ -20,6 +21,7 @@ export async function GET(request: NextRequest) {
     const [result, summary, newPaidOrderIds] = await Promise.all([listStaffOrders(filters), getStaffSummary(), getNewPaidOrderIds()]);
     return NextResponse.json({ ...result, summary, newPaidOrderIds });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to load orders." }, { status: 503 });
+    logServerFailure("staff.orders.list", error);
+    return NextResponse.json({ error: "Unable to load orders. Please try again later." }, { status: 503 });
   }
 }

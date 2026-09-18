@@ -5,6 +5,7 @@ import { createPendingOrder, setCheckoutSession, type DeliveryDetails } from "@/
 import { getStripe } from "@/lib/stripe";
 import { getCanonicalCheckoutOrigin } from "@/lib/canonical-site-url";
 import { enforceRateLimit, trustedClientIp } from "@/lib/rate-limit";
+import { logServerFailure } from "@/lib/safe-server-log";
 
 const bodySchema = z.object({
   items: z.array(z.object({ id: z.string().min(1), quantity: z.number().int().min(1).max(50) })).min(1).max(100),
@@ -16,7 +17,7 @@ const bodySchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
-  try { if (!(await enforceRateLimit("checkout", [{ name: "ip", value: trustedClientIp(request), limit: 20, windowSeconds: 900 }]))) return NextResponse.json({ error: "Too many checkout attempts. Please try again later." }, { status: 429 }); } catch { return NextResponse.json({ error: "Checkout is temporarily unavailable." }, { status: 503 }); }
+  try { if (!(await enforceRateLimit("checkout", [{ name: "ip", value: trustedClientIp(request), limit: 20, windowSeconds: 900 }]))) return NextResponse.json({ error: "Too many checkout attempts. Please try again later." }, { status: 429 }); } catch (error) { logServerFailure("checkout.rate-limit", error); return NextResponse.json({ error: "Checkout is temporarily unavailable." }, { status: 503 }); }
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Invalid checkout details." }, { status: 400 });
   const verifiedItems = parsed.data.items.map(item => ({ product: getOfficialProduct(item.id), quantity: item.quantity }));
@@ -32,6 +33,7 @@ export async function POST(request: NextRequest) {
     if (!session.url) throw new Error("Stripe did not return a checkout URL.");
     return NextResponse.json({ url: session.url });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to start payment." }, { status: 503 });
+    logServerFailure("checkout.create-session", error);
+    return NextResponse.json({ error: "Unable to start payment. Please try again later." }, { status: 503 });
   }
 }
