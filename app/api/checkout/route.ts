@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getOfficialProduct } from "@/lib/menuCatalog";
-import { createPendingOrder, type DeliveryDetails } from "@/lib/orders";
+import { createPendingOrder, setCheckoutSession, type DeliveryDetails } from "@/lib/orders";
 import { getStripe } from "@/lib/stripe";
 
 const bodySchema = z.object({
@@ -20,12 +20,12 @@ export async function POST(request: NextRequest) {
   if (verifiedItems.some(item => !item.product)) return NextResponse.json({ error: "One or more menu items are unavailable." }, { status: 400 });
   const lines = verifiedItems.map(({ product, quantity }) => ({ productId: product!.id, name: product!.name, category: product!.category, quantity, unitPriceInCents: product!.priceInCents, totalInCents: product!.priceInCents * quantity }));
   const totalInCents = lines.reduce((total, item) => total + item.totalInCents, 0);
-  const order = await createPendingOrder({ items: lines, totalInCents, delivery: parsed.data.delivery as DeliveryDetails });
   try {
+    const order = await createPendingOrder({ items: lines, totalInCents, delivery: parsed.data.delivery as DeliveryDetails });
     const stripe = getStripe();
     const origin = process.env.NEXT_PUBLIC_SITE_URL || request.nextUrl.origin;
     const session = await stripe.checkout.sessions.create({ mode: "payment", payment_method_types: ["card"], line_items: lines.map(item => ({ quantity: item.quantity, price_data: { currency: "eur", unit_amount: item.unitPriceInCents, product_data: { name: item.name } } })), metadata: { orderId: order.id }, success_url: `${origin}/order/success?order_id=${order.id}`, cancel_url: `${origin}/order/cancel?order_id=${order.id}` });
-    await (await import("@/lib/orders")).setCheckoutSession(order.id, session.id);
+    await setCheckoutSession(order.id, session.id);
     if (!session.url) throw new Error("Stripe did not return a checkout URL.");
     return NextResponse.json({ url: session.url });
   } catch (error) {
