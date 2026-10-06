@@ -104,23 +104,36 @@ function orderFromRows(row: DatabaseOrder, items: DatabaseOrderItem[]): Restaura
   };
 }
 
-export async function createPendingOrder(input: OrderInput) {
+export async function createPendingOrder(input: OrderInput & { stripePaymentIntentId?: string }) {
   const sql = getDatabase();
   const id = randomUUID();
   const orderNumber = `DV-${Date.now()}-${randomUUID().slice(0, 4).toUpperCase()}`;
   const details = deliveryFields(input.delivery);
 
-  await sql`
+  const inserted = await sql`
     INSERT INTO orders (
       id, order_number, order_status, payment_status,
       customer_name, customer_phone, customer_email, delivery_type,
-      floor, room, pool_location_details, customer_notes, total_amount_cents
+      floor, room, pool_location_details, customer_notes, total_amount_cents, stripe_payment_intent_id
     ) VALUES (
       ${id}, ${orderNumber}, 'PENDING_PAYMENT', 'PENDING',
       ${details.customerName}, ${details.customerPhone}, ${details.customerEmail}, ${input.delivery.type},
-      ${details.floor}, ${details.room}, ${details.poolLocationDetails}, ${details.customerNotes}, ${input.totalInCents}
+      ${details.floor}, ${details.room}, ${details.poolLocationDetails}, ${details.customerNotes}, ${input.totalInCents}, ${input.stripePaymentIntentId ?? null}
     )
-  `;
+    ON CONFLICT (stripe_payment_intent_id) DO NOTHING
+    RETURNING id
+  ` as { id: string }[];
+
+  if (!inserted.length && input.stripePaymentIntentId) {
+    const existing = await sql`SELECT * FROM orders WHERE stripe_payment_intent_id = ${input.stripePaymentIntentId}` as DatabaseOrder[];
+    if (existing[0]) {
+      const existingItems = await sql`
+        SELECT product_id, product_name, category, quantity, unit_price_cents, line_total_cents
+        FROM order_items WHERE order_id = ${existing[0].id} ORDER BY id
+      ` as DatabaseOrderItem[];
+      return orderFromRows(existing[0], existingItems);
+    }
+  }
 
   try {
     await Promise.all(input.items.map((item) => sql`
@@ -135,7 +148,7 @@ export async function createPendingOrder(input: OrderInput) {
     throw error;
   }
 
-  return { id, orderNumber, createdAt: new Date().toISOString(), status: "PENDING_PAYMENT" as const, paymentStatus: "PENDING" as const, items: input.items, totalInCents: input.totalInCents, delivery: input.delivery, processedWebhookEventIds: [] };
+  return { id, orderNumber, createdAt: new Date().toISOString(), status: "PENDING_PAYMENT" as const, paymentStatus: "PENDING" as const, items: input.items, totalInCents: input.totalInCents, delivery: input.delivery, ...(input.stripePaymentIntentId ? { stripePaymentIntentId: input.stripePaymentIntentId } : {}), processedWebhookEventIds: [] };
 }
 
 export async function getOrder(id: string) {
@@ -163,7 +176,7 @@ export async function setCheckoutSession(id: string, stripeCheckoutSessionId: st
   `;
 }
 
-export async function markOrderPaid(id: string, eventId: string, stripeCheckoutSessionId: string, stripePaymentIntentId?: string) {
+export async function markOrderPaid(id: string, eventId: string, stripeCheckoutSessionId?: string, stripePaymentIntentId?: string, eventType = "checkout.session.completed") {
   const sql = getDatabase();
 
   // Stripe retries webhooks. Inserting the Stripe event in this query makes
@@ -171,7 +184,7 @@ export async function markOrderPaid(id: string, eventId: string, stripeCheckoutS
   await sql`
     WITH recorded_event AS (
       INSERT INTO stripe_webhook_events (stripe_event_id, order_id, event_type)
-      SELECT ${eventId}, orders.id, 'checkout.session.completed'
+      SELECT ${eventId}, orders.id, ${eventType}
       FROM orders
       WHERE orders.id = ${id}
       ON CONFLICT (stripe_event_id) DO NOTHING
@@ -183,7 +196,7 @@ export async function markOrderPaid(id: string, eventId: string, stripeCheckoutS
       payment_status = 'PAID',
       paid_at = COALESCE(paid_at, NOW()),
       updated_at = NOW(),
-      stripe_checkout_session_id = ${stripeCheckoutSessionId},
+      stripe_checkout_session_id = COALESCE(${stripeCheckoutSessionId ?? null}, stripe_checkout_session_id),
       stripe_payment_intent_id = COALESCE(${stripePaymentIntentId ?? null}, stripe_payment_intent_id)
     WHERE id IN (SELECT order_id FROM recorded_event)
   `;

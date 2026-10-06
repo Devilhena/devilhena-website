@@ -15,6 +15,10 @@ export async function POST(request: NextRequest) {
       const session = event.data.object;
       if (session.payment_status === "paid" && session.metadata?.orderId) await markOrderPaid(session.metadata.orderId, event.id, session.id, typeof session.payment_intent === "string" ? session.payment_intent : undefined);
     }
+    if (event.type === "payment_intent.succeeded") {
+      const intent = event.data.object;
+      if (intent.metadata?.orderId) await markOrderPaid(intent.metadata.orderId, event.id, undefined, intent.id, "payment_intent.succeeded");
+    }
   } catch (error) {
     logServerFailure("stripe.webhook.process", error);
     return NextResponse.json({ error: "Webhook processing is temporarily unavailable." }, { status: 503 });
