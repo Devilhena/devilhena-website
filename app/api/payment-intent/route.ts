@@ -67,7 +67,7 @@ export async function POST(request: NextRequest) {
       orderId: order.id,
       orderNumber: order.orderNumber,
       totalInCents: order.totalInCents,
-      returnUrl: `${getPaymentReturnOrigin()}/order/success?order_id=${order.id}`,
+      returnUrl: `${getPaymentReturnOrigin(request)}/order/success?order_id=${order.id}`,
     });
   } catch (error) {
     logServerFailure("payment-intent.create", error);
