@@ -1,32 +1,28 @@
 "use client";
 
 import Link from "next/link";
-import { Elements } from "@stripe/react-stripe-js";
-import { loadStripe } from "@stripe/stripe-js";
+import { useRouter } from "next/navigation";
 import { LoaderCircle, MapPin } from "lucide-react";
 import { useState } from "react";
 import { DeliveryNoticeModal } from "@/components/DeliveryNoticeModal";
-import { EmbeddedPaymentForm } from "./EmbeddedPaymentForm";
-import { useCart } from "./CartProvider";
+import { formatPrice, useCart } from "./CartProvider";
+import { readPaymentSession, savePaymentSession } from "./payment-session";
 
 type FormData = { name: string; phone: string; email: string; orderType: "" | "pickup"; notes: string };
 type Delivery =
   | { type: "hotel-room"; guestName: string; phone: string; floor: string; room: string; instructions?: string }
   | { type: "pool-area"; guestName: string; phone: string; locationDetails?: string; instructions?: string }
   | { type: "pickup"; name: string; phone: string; email: string; notes: string };
-type PaymentSession = { clientSecret: string; totalInCents: number; returnUrl: string };
 
 const empty: FormData = { name: "", phone: "", email: "", orderType: "", notes: "" };
-const stripePublishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
-const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null;
 
 export function CheckoutScreen() {
-  const { items, hotelDelivery } = useCart();
+  const router = useRouter();
+  const { items, subtotal, hotelDelivery } = useCart();
   const [data, setData] = useState(empty);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [deliveryNoticeOpen, setDeliveryNoticeOpen] = useState(false);
   const [startingPayment, setStartingPayment] = useState(false);
-  const [paymentSession, setPaymentSession] = useState<PaymentSession>();
 
   const set = (key: keyof FormData, value: string) => setData(current => ({ ...current, [key]: value }));
   const field = (key: "name" | "phone" | "email", label: string, type = "text") => (
@@ -49,7 +45,6 @@ export function CheckoutScreen() {
         ? { type: "hotel-room", guestName: hotelDelivery.guestName, phone: hotelDelivery.phone, floor: hotelDelivery.floor || "", room: hotelDelivery.room || "", instructions: hotelDelivery.instructions }
         : { type: "pool-area", guestName: hotelDelivery.guestName, phone: hotelDelivery.phone, locationDetails: hotelDelivery.poolDetails, instructions: hotelDelivery.instructions };
     }
-
     if (!data.name.trim()) next.name = "Please enter your full name.";
     if (!data.phone.trim()) next.phone = "Please enter your phone number.";
     if (!/^\S+@\S+\.\S+$/.test(data.email)) next.email = "Please enter a valid email.";
@@ -63,12 +58,13 @@ export function CheckoutScreen() {
     event.preventDefault();
     const delivery = deliveryDetails();
     if (!delivery || startingPayment) return;
-    if (!stripePromise) {
-      setErrors({ order: "Secure payment is not configured for this local preview." });
+    const fingerprint = JSON.stringify({ items: items.map(item => [item.id, item.quantity]), delivery });
+    const existingSession = readPaymentSession();
+    if (existingSession?.fingerprint === fingerprint) {
+      router.push("/payment");
       return;
     }
 
-    const fingerprint = JSON.stringify({ items: items.map(item => [item.id, item.quantity]), delivery });
     const stored = window.sessionStorage.getItem("de-vilhena-payment-attempt");
     let attemptId = "";
     try {
@@ -85,9 +81,10 @@ export function CheckoutScreen() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ attemptId, items: items.map(item => ({ id: item.id, quantity: item.quantity })), delivery }),
       });
-      const payload = await response.json().catch(() => ({})) as Partial<PaymentSession> & { error?: string };
+      const payload = await response.json().catch(() => ({})) as { clientSecret?: string; totalInCents?: number; returnUrl?: string; error?: string };
       if (!response.ok || !payload.clientSecret || !payload.returnUrl || typeof payload.totalInCents !== "number") throw new Error(payload.error || "Unable to start secure payment.");
-      setPaymentSession({ clientSecret: payload.clientSecret, returnUrl: payload.returnUrl, totalInCents: payload.totalInCents });
+      savePaymentSession({ fingerprint, clientSecret: payload.clientSecret, totalInCents: payload.totalInCents, returnUrl: payload.returnUrl });
+      router.push("/payment");
     } catch (error) {
       setErrors({ order: error instanceof Error ? error.message : "Unable to start secure payment." });
     } finally {
@@ -129,32 +126,5 @@ export function CheckoutScreen() {
     </>
   );
 
-  return (
-    <main className="min-h-screen px-5 pb-20 pt-32 lg:px-10">
-      <div className="mx-auto max-w-3xl">
-        <p className="eyebrow">Checkout</p>
-        <h1 className="mt-3 font-display text-4xl sm:text-5xl">Almost <i className="text-earth">there.</i></h1>
-        <section className="mt-10 rounded-[2rem] bg-beige/45 p-6 sm:p-10">
-          {paymentSession && stripePromise ? (
-            <>
-              {deliveryContent}
-              <Elements stripe={stripePromise} options={{ clientSecret: paymentSession.clientSecret, appearance: { theme: "stripe", variables: { colorPrimary: "#254132", colorText: "#254132", colorBackground: "#f8f3e8", borderRadius: "14px" } } }}>
-                <EmbeddedPaymentForm amountInCents={paymentSession.totalInCents} returnUrl={paymentSession.returnUrl} />
-              </Elements>
-            </>
-          ) : (
-            <form onSubmit={startPayment} noValidate>
-              {deliveryContent}
-              {errors.order && <span className="mt-5 block text-xs text-red-700">{errors.order}</span>}
-              <button disabled={startingPayment} className="focus-ring mt-8 inline-flex min-h-12 items-center gap-2 rounded-full bg-forest px-6 py-3 text-xs font-semibold tracking-[.15em] text-cream transition hover:bg-earth disabled:cursor-not-allowed disabled:opacity-60">
-                {startingPayment && <LoaderCircle className="animate-spin" size={15} />}
-                {startingPayment ? "LOADING SECURE PAYMENT…" : "PROCEED TO PAYMENT"}
-              </button>
-            </form>
-          )}
-        </section>
-      </div>
-      {deliveryNoticeOpen && <DeliveryNoticeModal onClose={() => setDeliveryNoticeOpen(false)} />}
-    </main>
-  );
+  return <main className="min-h-screen px-5 pb-20 pt-32 lg:px-10"><div className="mx-auto max-w-3xl"><p className="eyebrow">Checkout</p><h1 className="mt-3 font-display text-4xl sm:text-5xl">Almost <i className="text-earth">there.</i></h1><form onSubmit={startPayment} noValidate className="mt-10 rounded-[2rem] bg-beige/45 p-6 sm:p-10">{deliveryContent}<div className="mt-8 border-t border-earth/15 pt-6"><p className="eyebrow">Order total</p><p className="mt-2 font-display text-3xl">{formatPrice(subtotal)}</p><p className="mt-2 text-sm text-forest/65">Your final amount is securely confirmed by the server before payment.</p></div>{errors.order && <span className="mt-5 block text-xs text-red-700">{errors.order}</span>}<button disabled={startingPayment} className="focus-ring mt-8 inline-flex min-h-12 items-center gap-2 rounded-full bg-forest px-6 py-3 text-xs font-semibold tracking-[.15em] text-cream transition hover:bg-earth disabled:cursor-not-allowed disabled:opacity-60">{startingPayment && <LoaderCircle className="animate-spin" size={15} />}{startingPayment ? "LOADING SECURE PAYMENT…" : "PROCEED TO PAYMENT"}</button></form></div>{deliveryNoticeOpen && <DeliveryNoticeModal onClose={() => setDeliveryNoticeOpen(false)} />}</main>;
 }
