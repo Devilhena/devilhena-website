@@ -4,120 +4,23 @@ import type { OrderLine } from "@/lib/orders";
 export const restaurantStatuses = ["NEW", "ACCEPTED", "PREPARING", "READY", "DELIVERED", "CANCELLED"] as const;
 export type RestaurantStatus = (typeof restaurantStatuses)[number];
 export type StaffPaymentStatus = "PENDING" | "PAID";
-
-export type StaffOrder = {
-  id: string; orderNumber: string; createdAt: string; paidAt?: string; restaurantStatus: RestaurantStatus; paymentStatus: StaffPaymentStatus;
-  customerName?: string; customerPhone?: string; customerEmail?: string; deliveryType: "hotel-room" | "pool-area" | "pickup";
-  floor?: string; room?: string; poolLocationDetails?: string; customerNotes?: string; totalInCents: number;
-  stripeCheckoutSessionId?: string; stripePaymentIntentId?: string; items: OrderLine[];
-};
-
-type OrderRow = {
-  id: string; order_number: string; created_at: string | Date; paid_at: string | Date | null; restaurant_status: RestaurantStatus; payment_status: StaffPaymentStatus;
-  customer_name: string | null; customer_phone: string | null; customer_email: string | null; delivery_type: StaffOrder["deliveryType"];
-  floor: string | null; room: string | null; pool_location_details: string | null; customer_notes: string | null; total_amount_cents: number;
-  stripe_checkout_session_id: string | null; stripe_payment_intent_id: string | null;
-};
-type ItemRow = { product_id: string; product_name: string; category: string; quantity: number; unit_price_cents: number; line_total_cents: number };
-
-export type StaffOrderFilters = { status?: RestaurantStatus; payment?: StaffPaymentStatus; search?: string; date?: string; page?: number };
-
-const asIso = (value: string | Date) => new Date(value).toISOString();
+export type PaymentMode = "TEST" | "LIVE";
 const activeStatuses: RestaurantStatus[] = ["NEW", "ACCEPTED", "PREPARING", "READY"];
-
-function mapOrder(row: OrderRow, items: ItemRow[]): StaffOrder {
-  return {
-    id: row.id, orderNumber: row.order_number, createdAt: asIso(row.created_at), restaurantStatus: row.restaurant_status, paymentStatus: row.payment_status,
-    ...(row.paid_at ? { paidAt: asIso(row.paid_at) } : {}), ...(row.customer_name ? { customerName: row.customer_name } : {}), ...(row.customer_phone ? { customerPhone: row.customer_phone } : {}), ...(row.customer_email ? { customerEmail: row.customer_email } : {}),
-    deliveryType: row.delivery_type, ...(row.floor ? { floor: row.floor } : {}), ...(row.room ? { room: row.room } : {}), ...(row.pool_location_details ? { poolLocationDetails: row.pool_location_details } : {}), ...(row.customer_notes ? { customerNotes: row.customer_notes } : {}),
-    totalInCents: row.total_amount_cents, ...(row.stripe_checkout_session_id ? { stripeCheckoutSessionId: row.stripe_checkout_session_id } : {}), ...(row.stripe_payment_intent_id ? { stripePaymentIntentId: row.stripe_payment_intent_id } : {}),
-    items: items.map((item) => ({ productId: item.product_id, name: item.product_name, category: item.category, quantity: item.quantity, unitPriceInCents: item.unit_price_cents, totalInCents: item.line_total_cents })),
-  };
-}
-
-export async function listStaffOrders(filters: StaffOrderFilters = {}) {
-  const sql = getDatabase();
-  const limit = 30;
-  const page = Math.max(1, Math.min(filters.page || 1, 10000));
-  const offset = (page - 1) * limit;
-  const status = filters.status ?? null;
-  const payment = filters.payment ?? null;
-  const date = filters.date ?? null;
-  const search = filters.search?.trim().slice(0, 80) || null;
-  const pattern = search ? `%${search}%` : null;
-  const rows = await sql`
-    SELECT id, order_number, created_at, paid_at, restaurant_status, payment_status, customer_name, customer_phone, customer_email,
-      delivery_type, floor, room, pool_location_details, customer_notes, total_amount_cents, stripe_checkout_session_id, stripe_payment_intent_id
-    FROM orders
-    WHERE (${status}::text IS NULL OR restaurant_status = ${status})
-      AND (${payment}::text IS NULL OR payment_status = ${payment})
-      AND (${date}::text IS NULL OR (created_at AT TIME ZONE 'Europe/Malta')::date = ${date}::date)
-      AND (${pattern}::text IS NULL OR order_number ILIKE ${pattern} OR COALESCE(room, '') ILIKE ${pattern})
-    ORDER BY
-      CASE WHEN restaurant_status IN ('NEW', 'ACCEPTED', 'PREPARING', 'READY') THEN 0 ELSE 1 END ASC,
-      CASE WHEN restaurant_status IN ('NEW', 'ACCEPTED', 'PREPARING', 'READY') THEN created_at END ASC NULLS LAST,
-      CASE WHEN restaurant_status IN ('DELIVERED', 'CANCELLED') THEN created_at END DESC NULLS LAST
-    LIMIT ${limit} OFFSET ${offset}
-  ` as OrderRow[];
-  const countRows = await sql`
-    SELECT COUNT(*)::int AS total FROM orders
-    WHERE (${status}::text IS NULL OR restaurant_status = ${status})
-      AND (${payment}::text IS NULL OR payment_status = ${payment})
-      AND (${date}::text IS NULL OR (created_at AT TIME ZONE 'Europe/Malta')::date = ${date}::date)
-      AND (${pattern}::text IS NULL OR order_number ILIKE ${pattern} OR COALESCE(room, '') ILIKE ${pattern})
-  ` as { total: number }[];
-  const orders = await Promise.all(rows.map(async (row) => {
-    const items = await sql`SELECT product_id, product_name, category, quantity, unit_price_cents, line_total_cents FROM order_items WHERE order_id = ${row.id} ORDER BY id` as ItemRow[];
-    return mapOrder(row, items);
-  }));
-  return { orders, page, pageSize: limit, total: Number(countRows[0]?.total || 0) };
-}
-
-export async function getStaffSummary() {
-  const sql = getDatabase();
-  const rows = await sql`
-    SELECT
-      COUNT(*) FILTER (WHERE restaurant_status = 'NEW' AND payment_status = 'PAID')::int AS new_orders,
-      COUNT(*) FILTER (WHERE restaurant_status IN ('ACCEPTED', 'PREPARING', 'READY') AND payment_status = 'PAID')::int AS active_orders,
-      COUNT(*) FILTER (WHERE restaurant_status = 'DELIVERED' AND (delivered_at AT TIME ZONE 'Europe/Malta')::date = (NOW() AT TIME ZONE 'Europe/Malta')::date)::int AS completed_today,
-      COUNT(*) FILTER (WHERE payment_status = 'PAID' AND (paid_at AT TIME ZONE 'Europe/Malta')::date = (NOW() AT TIME ZONE 'Europe/Malta')::date)::int AS paid_orders_today,
-      COALESCE(SUM(total_amount_cents) FILTER (WHERE payment_status = 'PAID' AND (paid_at AT TIME ZONE 'Europe/Malta')::date = (NOW() AT TIME ZONE 'Europe/Malta')::date), 0)::int AS paid_sales_today,
-      COUNT(*) FILTER (WHERE restaurant_status = 'PREPARING' AND payment_status = 'PAID')::int AS preparing_orders,
-      COUNT(*) FILTER (WHERE restaurant_status = 'READY' AND payment_status = 'PAID')::int AS ready_orders,
-      COUNT(*) FILTER (WHERE restaurant_status = 'DELIVERED' AND (delivered_at AT TIME ZONE 'Europe/Malta')::date = (NOW() AT TIME ZONE 'Europe/Malta')::date)::int AS delivered_today
-    FROM orders
-  ` as Record<string, number>[];
-  const row = rows[0] || {};
-  return { newOrders: Number(row.new_orders || 0), activeOrders: Number(row.active_orders || 0), completedToday: Number(row.completed_today || 0), paidOrdersToday: Number(row.paid_orders_today || 0), paidSalesToday: Number(row.paid_sales_today || 0), preparingOrders: Number(row.preparing_orders || 0), readyOrders: Number(row.ready_orders || 0), deliveredToday: Number(row.delivered_today || 0) };
-}
-
-export async function getNewPaidOrderIds() {
-  const sql = getDatabase();
-  const rows = await sql`SELECT id FROM orders WHERE restaurant_status = 'NEW' AND payment_status = 'PAID' ORDER BY created_at DESC LIMIT 50` as { id: string }[];
-  return rows.map((row) => row.id);
-}
-
+export type StaffOrder = { id: string; orderNumber: string; createdAt: string; paidAt?: string; restaurantStatus: RestaurantStatus; paymentStatus: StaffPaymentStatus; customerName?: string; customerPhone?: string; customerEmail?: string; deliveryType: "hotel-room" | "pool-area" | "pickup"; floor?: string; room?: string; poolLocationDetails?: string; customerNotes?: string; totalInCents: number; stripeCheckoutSessionId?: string; stripePaymentIntentId?: string; paymentMode?: PaymentMode; archivedAt?: string; archiveReason?: string; acceptedAt?: string; completedAt?: string; acceptedByName?: string; completedByName?: string; archivedByName?: string; items: OrderLine[]; };
+type OrderRow = Record<string, string | number | Date | null>;
+type ItemRow = { product_id: string; product_name: string; category: string; quantity: number; unit_price_cents: number; line_total_cents: number };
+export type StaffOrderFilters = { status?: RestaurantStatus; payment?: StaffPaymentStatus; search?: string; date?: string; page?: number; activeOnly?: boolean; archived?: boolean };
 export class StaffOrderError extends Error { constructor(message: string, readonly statusCode: number) { super(message); } }
+const asIso = (value: unknown) => value ? new Date(value as string | Date).toISOString() : undefined;
+const str = (row: OrderRow, key: string) => typeof row[key] === "string" ? row[key] as string : undefined;
+const toInt = (value: unknown) => Number(value || 0);
 
-const transitions: Record<RestaurantStatus, RestaurantStatus[]> = { NEW: ["ACCEPTED", "CANCELLED"], ACCEPTED: ["PREPARING", "CANCELLED"], PREPARING: ["READY", "CANCELLED"], READY: ["DELIVERED", "CANCELLED"], DELIVERED: [], CANCELLED: [] };
+function mapOrder(row: OrderRow, items: ItemRow[]): StaffOrder { return { id: String(row.id), orderNumber: String(row.order_number), createdAt: new Date(row.created_at as string | Date).toISOString(), restaurantStatus: row.restaurant_status as RestaurantStatus, paymentStatus: row.payment_status as StaffPaymentStatus, ...(asIso(row.paid_at) ? { paidAt: asIso(row.paid_at) } : {}), ...(str(row, "customer_name") ? { customerName: str(row, "customer_name") } : {}), ...(str(row, "customer_phone") ? { customerPhone: str(row, "customer_phone") } : {}), ...(str(row, "customer_email") ? { customerEmail: str(row, "customer_email") } : {}), deliveryType: row.delivery_type as StaffOrder["deliveryType"], ...(str(row, "floor") ? { floor: str(row, "floor") } : {}), ...(str(row, "room") ? { room: str(row, "room") } : {}), ...(str(row, "pool_location_details") ? { poolLocationDetails: str(row, "pool_location_details") } : {}), ...(str(row, "customer_notes") ? { customerNotes: str(row, "customer_notes") } : {}), totalInCents: toInt(row.total_amount_cents), ...(str(row, "stripe_checkout_session_id") ? { stripeCheckoutSessionId: str(row, "stripe_checkout_session_id") } : {}), ...(str(row, "stripe_payment_intent_id") ? { stripePaymentIntentId: str(row, "stripe_payment_intent_id") } : {}), ...(str(row, "payment_mode") ? { paymentMode: str(row, "payment_mode") as PaymentMode } : {}), ...(asIso(row.archived_at) ? { archivedAt: asIso(row.archived_at) } : {}), ...(str(row, "archive_reason") ? { archiveReason: str(row, "archive_reason") } : {}), ...(asIso(row.accepted_at) ? { acceptedAt: asIso(row.accepted_at) } : {}), ...(asIso(row.delivered_at) ? { completedAt: asIso(row.delivered_at) } : {}), ...(str(row, "accepted_by_name") ? { acceptedByName: str(row, "accepted_by_name") } : {}), ...(str(row, "completed_by_name") ? { completedByName: str(row, "completed_by_name") } : {}), ...(str(row, "archived_by_name") ? { archivedByName: str(row, "archived_by_name") } : {}), items: items.map((item) => ({ productId: item.product_id, name: item.product_name, category: item.category, quantity: item.quantity, unitPriceInCents: item.unit_price_cents, totalInCents: item.line_total_cents })) }; }
+const selectedFields = "o.id, o.order_number, o.created_at, o.paid_at, o.restaurant_status, o.payment_status, o.customer_name, o.customer_phone, o.customer_email, o.delivery_type, o.floor, o.room, o.pool_location_details, o.customer_notes, o.total_amount_cents, o.stripe_checkout_session_id, o.stripe_payment_intent_id, o.payment_mode, o.archived_at, o.archive_reason, o.accepted_at, o.delivered_at, accepted.full_name AS accepted_by_name, completed.full_name AS completed_by_name, archived.full_name AS archived_by_name";
 
-export async function updateRestaurantStatus(id: string, nextStatus: RestaurantStatus) {
-  const sql = getDatabase();
-  const currentRows = await sql`SELECT restaurant_status, payment_status FROM orders WHERE id = ${id}` as { restaurant_status: RestaurantStatus; payment_status: StaffPaymentStatus }[];
-  const current = currentRows[0];
-  if (!current) throw new StaffOrderError("Order not found.", 404);
-  if (current.payment_status !== "PAID") throw new StaffOrderError("Only verified paid orders can enter the restaurant workflow.", 409);
-  if (!transitions[current.restaurant_status].includes(nextStatus)) throw new StaffOrderError("That status change is not allowed.", 409);
-  const updated = await sql`
-    UPDATE orders SET restaurant_status = ${nextStatus}, updated_at = NOW(),
-      accepted_at = CASE WHEN ${nextStatus} = 'ACCEPTED' THEN COALESCE(accepted_at, NOW()) ELSE accepted_at END,
-      preparing_at = CASE WHEN ${nextStatus} = 'PREPARING' THEN COALESCE(preparing_at, NOW()) ELSE preparing_at END,
-      ready_at = CASE WHEN ${nextStatus} = 'READY' THEN COALESCE(ready_at, NOW()) ELSE ready_at END,
-      delivered_at = CASE WHEN ${nextStatus} = 'DELIVERED' THEN COALESCE(delivered_at, NOW()) ELSE delivered_at END,
-      cancelled_at = CASE WHEN ${nextStatus} = 'CANCELLED' THEN COALESCE(cancelled_at, NOW()) ELSE cancelled_at END
-    WHERE id = ${id} AND restaurant_status = ${current.restaurant_status} AND payment_status = 'PAID'
-    RETURNING id
-  ` as { id: string }[];
-  if (!updated[0]) throw new StaffOrderError("This order changed. Refresh and try again.", 409);
-  return { id, restaurantStatus: nextStatus };
-}
+export async function listStaffOrders(filters: StaffOrderFilters = {}) { const sql = getDatabase(); const limit = 30; const page = Math.max(1, Math.min(filters.page || 1, 10000)); const offset = (page - 1) * limit; const status = filters.status ?? null; const payment = filters.payment ?? null; const date = filters.date ?? null; const search = filters.search?.trim().slice(0, 80) || null; const pattern = search ? `%${search}%` : null; const activeOnly = Boolean(filters.activeOnly); const archived = Boolean(filters.archived); const rows = await sql`SELECT o.id, o.order_number, o.created_at, o.paid_at, o.restaurant_status, o.payment_status, o.customer_name, o.customer_phone, o.customer_email, o.delivery_type, o.floor, o.room, o.pool_location_details, o.customer_notes, o.total_amount_cents, o.stripe_checkout_session_id, o.stripe_payment_intent_id, o.payment_mode, o.archived_at, o.archive_reason, o.accepted_at, o.delivered_at, accepted.full_name AS accepted_by_name, completed.full_name AS completed_by_name, archived.full_name AS archived_by_name FROM orders o LEFT JOIN staff_users accepted ON accepted.id = o.accepted_by LEFT JOIN staff_users completed ON completed.id = o.completed_by LEFT JOIN staff_users archived ON archived.id = o.archived_by WHERE (${status}::text IS NULL OR o.restaurant_status = ${status}) AND (${payment}::text IS NULL OR o.payment_status = ${payment}) AND (${date}::text IS NULL OR (o.created_at AT TIME ZONE 'Europe/Malta')::date = ${date}::date) AND (${pattern}::text IS NULL OR o.order_number ILIKE ${pattern} OR COALESCE(o.room, '') ILIKE ${pattern}) AND (${activeOnly}::boolean = false OR (o.payment_status = 'PAID' AND o.restaurant_status IN ('NEW', 'ACCEPTED', 'PREPARING', 'READY') AND o.archived_at IS NULL)) AND (${archived}::boolean = false OR o.archived_at IS NOT NULL) ORDER BY CASE WHEN o.restaurant_status IN ('NEW', 'ACCEPTED', 'PREPARING', 'READY') THEN 0 ELSE 1 END, o.created_at DESC LIMIT ${limit} OFFSET ${offset}` as OrderRow[]; const countRows = await sql`SELECT COUNT(*)::int AS total FROM orders o WHERE (${status}::text IS NULL OR o.restaurant_status = ${status}) AND (${payment}::text IS NULL OR o.payment_status = ${payment}) AND (${date}::text IS NULL OR (o.created_at AT TIME ZONE 'Europe/Malta')::date = ${date}::date) AND (${pattern}::text IS NULL OR o.order_number ILIKE ${pattern} OR COALESCE(o.room, '') ILIKE ${pattern}) AND (${activeOnly}::boolean = false OR (o.payment_status = 'PAID' AND o.restaurant_status IN ('NEW', 'ACCEPTED', 'PREPARING', 'READY') AND o.archived_at IS NULL)) AND (${archived}::boolean = false OR o.archived_at IS NOT NULL)` as { total: number }[]; const orders = await Promise.all(rows.map(async (row) => mapOrder(row, await sql`SELECT product_id, product_name, category, quantity, unit_price_cents, line_total_cents FROM order_items WHERE order_id = ${String(row.id)} ORDER BY id` as ItemRow[]))); return { orders, page, pageSize: limit, total: Number(countRows[0]?.total || 0) }; }
+export async function listOrderActivity(orderId: string) { const sql = getDatabase(); return sql`SELECT a.event_type AS "eventType", a.from_status AS "fromStatus", a.to_status AS "toStatus", a.created_at AS "createdAt", s.full_name AS "actorName" FROM order_activity a LEFT JOIN staff_users s ON s.id = a.actor_staff_user_id WHERE a.order_id = ${orderId} ORDER BY a.created_at DESC`; }
+export async function getNewPaidOrderIds() { const sql = getDatabase(); const rows = await sql`SELECT id FROM orders WHERE restaurant_status = 'NEW' AND payment_status = 'PAID' AND archived_at IS NULL ORDER BY created_at DESC LIMIT 50` as { id: string }[]; return rows.map((row) => row.id); }
+export async function updateRestaurantStatus(id: string, nextStatus: "ACCEPTED" | "DELIVERED", actorId: string) { const sql = getDatabase(); const rows = await sql`SELECT restaurant_status, payment_status, archived_at FROM orders WHERE id = ${id} LIMIT 1` as { restaurant_status: RestaurantStatus; payment_status: StaffPaymentStatus; archived_at: string | null }[]; const current = rows[0]; if (!current) throw new StaffOrderError("Order not found.", 404); if (current.payment_status !== "PAID" || current.archived_at) throw new StaffOrderError("Only active verified paid orders can be updated.", 409); const allowed = nextStatus === "ACCEPTED" ? current.restaurant_status === "NEW" : activeStatuses.includes(current.restaurant_status); if (!allowed) throw new StaffOrderError("That order action is not allowed.", 409); const updated = await sql`UPDATE orders SET restaurant_status = ${nextStatus}, updated_at = NOW(), accepted_at = CASE WHEN ${nextStatus} = 'ACCEPTED' THEN COALESCE(accepted_at, NOW()) ELSE accepted_at END, accepted_by = CASE WHEN ${nextStatus} = 'ACCEPTED' THEN COALESCE(accepted_by, ${actorId}::uuid) ELSE accepted_by END, delivered_at = CASE WHEN ${nextStatus} = 'DELIVERED' THEN COALESCE(delivered_at, NOW()) ELSE delivered_at END, completed_by = CASE WHEN ${nextStatus} = 'DELIVERED' THEN COALESCE(completed_by, ${actorId}::uuid) ELSE completed_by END WHERE id = ${id} AND payment_status = 'PAID' AND archived_at IS NULL RETURNING id` as { id: string }[]; if (!updated[0]) throw new StaffOrderError("This order changed. Refresh and try again.", 409); await sql`INSERT INTO order_activity (order_id, actor_staff_user_id, event_type, from_status, to_status) VALUES (${id}, ${actorId}::uuid, ${nextStatus === 'ACCEPTED' ? 'ACCEPTED' : 'COMPLETED'}, ${current.restaurant_status}, ${nextStatus})`; return { id, restaurantStatus: nextStatus }; }
+export async function acknowledgeOrder(id: string, actorId: string) { const sql = getDatabase(); await sql`INSERT INTO order_activity (order_id, actor_staff_user_id, event_type) SELECT ${id}::uuid, ${actorId}::uuid, 'ACKNOWLEDGED' WHERE EXISTS (SELECT 1 FROM orders WHERE id = ${id} AND payment_status = 'PAID' AND restaurant_status = 'NEW' AND archived_at IS NULL)`; return { id }; }
+export async function archiveOrder(id: string, actorId: string, reason: string) { const sql = getDatabase(); const safeReason = reason.trim().slice(0, 500); const updated = await sql`UPDATE orders SET archived_at = NOW(), archived_by = ${actorId}::uuid, archive_reason = ${safeReason}, updated_at = NOW() WHERE id = ${id} AND archived_at IS NULL RETURNING restaurant_status` as { restaurant_status: RestaurantStatus }[]; if (!updated[0]) throw new StaffOrderError("Order not found or already archived.", 404); await sql`INSERT INTO order_activity (order_id, actor_staff_user_id, event_type, from_status, to_status, details) VALUES (${id}, ${actorId}::uuid, 'ARCHIVED', ${updated[0].restaurant_status}, ${updated[0].restaurant_status}, ${JSON.stringify({ reason: safeReason })}::jsonb)`; return { id }; }
