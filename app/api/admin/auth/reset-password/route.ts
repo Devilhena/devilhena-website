@@ -1,7 +1,7 @@
 import { hash } from "bcryptjs";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { readAdminPasswordResetToken } from "@/lib/admin-password-reset";
+import { credentialVersionForPasswordHash, readAdminPasswordResetToken, secureValueEqual } from "@/lib/auth-tokens";
 import { getDatabase } from "@/lib/db";
 import { enforceRateLimit, trustedClientIp } from "@/lib/rate-limit";
 import { hasCanonicalOrigin } from "@/lib/request-security";
@@ -19,9 +19,12 @@ export async function POST(request: NextRequest) {
     if (!allowed) return NextResponse.json({ error: "Too many attempts. Please request a new reset link later." }, { status: 429 });
     const reset = readAdminPasswordResetToken(parsed.data.token);
     if (!reset) return NextResponse.json({ error: "This reset link is invalid or has expired." }, { status: 400 });
-    const passwordHash = await hash(parsed.data.password, 12);
     const sql = getDatabase();
-    const updated = await sql`UPDATE staff_users SET password_hash = ${passwordHash}, session_version = session_version + 1, updated_at = NOW() WHERE id = ${reset.userId} AND role = 'ADMIN' AND account_status = 'APPROVED' AND session_version = ${reset.sessionVersion} RETURNING id` as { id: string }[];
+    const rows = await sql`SELECT id, password_hash FROM staff_users WHERE id = ${reset.userId} AND role = 'ADMIN' AND account_status = 'APPROVED' LIMIT 1` as { id: string; password_hash: string }[];
+    const admin = rows[0];
+    if (!admin || !secureValueEqual(reset.credentialVersion, credentialVersionForPasswordHash(admin.password_hash))) return NextResponse.json({ error: "This reset link is invalid or has already been used." }, { status: 400 });
+    const passwordHash = await hash(parsed.data.password, 12);
+    const updated = await sql`UPDATE staff_users SET password_hash = ${passwordHash}, updated_at = NOW() WHERE id = ${reset.userId} AND role = 'ADMIN' AND account_status = 'APPROVED' AND password_hash = ${admin.password_hash} RETURNING id` as { id: string }[];
     if (updated.length !== 1) return NextResponse.json({ error: "This reset link is invalid or has already been used." }, { status: 400 });
     return NextResponse.json({ ok: true });
   } catch (error) {

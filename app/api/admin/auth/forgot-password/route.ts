@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { createAdminPasswordResetToken, sendAdminPasswordResetEmail } from "@/lib/admin-password-reset";
+import { sendAdminPasswordResetEmail } from "@/lib/admin-password-reset";
+import { createAdminPasswordResetToken, credentialVersionForPasswordHash } from "@/lib/auth-tokens";
 import { getDatabase } from "@/lib/db";
 import { enforceRateLimit, trustedClientIp } from "@/lib/rate-limit";
 import { hasCanonicalOrigin } from "@/lib/request-security";
@@ -21,9 +22,9 @@ export async function POST(request: NextRequest) {
     ]);
     if (!allowed) return NextResponse.json({ error: "Too many reset requests. Please try again later." }, { status: 429 });
     const sql = getDatabase();
-    const rows = await sql`SELECT id, email, session_version FROM staff_users WHERE email = ${email} AND role = 'ADMIN' AND account_status = 'APPROVED' LIMIT 1` as { id: string; email: string; session_version: number }[];
+    const rows = await sql`SELECT id, email, password_hash FROM staff_users WHERE email = ${email} AND role = 'ADMIN' AND account_status = 'APPROVED' LIMIT 1` as { id: string; email: string; password_hash: string }[];
     const admin = rows[0];
-    if (admin) await sendAdminPasswordResetEmail(admin.email, createAdminPasswordResetToken(admin.id, Number(admin.session_version)));
+    if (admin) await sendAdminPasswordResetEmail(admin.email, createAdminPasswordResetToken(admin.id, credentialVersionForPasswordHash(admin.password_hash)));
     return NextResponse.json({ message: genericMessage }, { status: 202 });
   } catch (error) {
     logServerFailure("admin.password-reset.request", error);
