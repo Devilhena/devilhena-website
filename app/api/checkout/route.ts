@@ -3,7 +3,7 @@ import { z } from "zod";
 import { getOfficialProduct } from "@/lib/menuCatalog";
 import { createPendingOrder, setCheckoutSession, type DeliveryDetails } from "@/lib/orders";
 import { getStripe } from "@/lib/stripe";
-import { getCanonicalCheckoutOrigin } from "@/lib/canonical-site-url";
+import { getApprovedCheckoutOrigin } from "@/lib/canonical-site-url";
 import { enforceRateLimit, trustedClientIp } from "@/lib/rate-limit";
 import { logServerFailure } from "@/lib/safe-server-log";
 
@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
   const lines = verifiedItems.map(({ product, quantity }) => ({ productId: product!.id, name: product!.name, category: product!.category, quantity, unitPriceInCents: product!.priceInCents, totalInCents: product!.priceInCents * quantity }));
   const totalInCents = lines.reduce((total, item) => total + item.totalInCents, 0);
   try {
-    const origin = getCanonicalCheckoutOrigin();
+    const origin = getApprovedCheckoutOrigin(request);
     const order = await createPendingOrder({ items: lines, totalInCents, delivery: parsed.data.delivery as DeliveryDetails });
     const stripe = getStripe();
     const session = await stripe.checkout.sessions.create({ mode: "payment", payment_method_types: ["card"], line_items: lines.map(item => ({ quantity: item.quantity, price_data: { currency: "eur", unit_amount: item.unitPriceInCents, product_data: { name: item.name } } })), metadata: { orderId: order.id }, success_url: `${origin}/order/success?order_id=${order.id}`, cancel_url: `${origin}/order/cancel?order_id=${order.id}` });

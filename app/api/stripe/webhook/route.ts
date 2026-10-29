@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
+import { dispatchDueOrderEmails } from "@/lib/order-email-notifications";
 import { markOrderPaid } from "@/lib/orders";
 import { getStripe } from "@/lib/stripe";
 import { logServerFailure } from "@/lib/safe-server-log";
@@ -11,13 +12,20 @@ export async function POST(request: NextRequest) {
   let event;
   try { event = getStripe().webhooks.constructEvent(await request.text(), signature, secret); } catch { return NextResponse.json({ error: "Invalid Stripe signature." }, { status: 400 }); }
   try {
-    if (event.type === "checkout.session.completed") {
+    if (event.type === "checkout.session.completed" || event.type === "checkout.session.async_payment_succeeded") {
       const session = event.data.object;
-      if (session.payment_status === "paid" && session.metadata?.orderId) await markOrderPaid(session.metadata.orderId, event.id, session.id, typeof session.payment_intent === "string" ? session.payment_intent : undefined);
+      if (session.payment_status === "paid" && session.metadata?.orderId) await markOrderPaid(session.metadata.orderId, event.id, session.id, typeof session.payment_intent === "string" ? session.payment_intent : undefined, event.type);
     }
   } catch (error) {
     logServerFailure("stripe.webhook.process", error);
     return NextResponse.json({ error: "Webhook processing is temporarily unavailable." }, { status: 503 });
   }
+  // Delivery runs after the verified payment response. A provider outage cannot
+  // delay or reverse the Stripe acknowledgement; failed jobs remain durable for
+  // the scheduled recovery dispatcher.
+  after(async () => {
+    try { await dispatchDueOrderEmails(); }
+    catch (error) { logServerFailure("stripe.webhook.email-dispatch", error); }
+  });
   return NextResponse.json({ received: true });
 }

@@ -1,4 +1,4 @@
-import { canonicalProductionOrigin } from "@/lib/canonical-site-url";
+import { canonicalProductionOrigin, currentVercelPreviewOrigin } from "@/lib/canonical-site-url";
 
 /**
  * State-changing staff/admin requests must originate from the public site.
@@ -7,6 +7,8 @@ import { canonicalProductionOrigin } from "@/lib/canonical-site-url";
 export function hasCanonicalOrigin(request: Request) {
   const origin = request.headers.get("origin");
   if (origin === canonicalProductionOrigin) return true;
+  const previewOrigin = currentVercelPreviewOrigin(request);
+  if (previewOrigin && origin === previewOrigin) return true;
   // Local development is deliberately opt-in through NODE_ENV and never applies
   // to a Vercel preview or production deployment.
   return process.env.NODE_ENV === "development" && /^http:\/\/localhost:\d+$/.test(origin || "");

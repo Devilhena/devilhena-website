@@ -163,7 +163,7 @@ export async function setCheckoutSession(id: string, stripeCheckoutSessionId: st
   `;
 }
 
-export async function markOrderPaid(id: string, eventId: string, stripeCheckoutSessionId: string, stripePaymentIntentId?: string) {
+export async function markOrderPaid(id: string, eventId: string, stripeCheckoutSessionId: string, stripePaymentIntentId?: string, eventType = "checkout.session.completed") {
   const sql = getDatabase();
 
   // Stripe retries webhooks. Inserting the Stripe event in this query makes
@@ -171,21 +171,35 @@ export async function markOrderPaid(id: string, eventId: string, stripeCheckoutS
   await sql`
     WITH recorded_event AS (
       INSERT INTO stripe_webhook_events (stripe_event_id, order_id, event_type)
-      SELECT ${eventId}, orders.id, 'checkout.session.completed'
+      SELECT ${eventId}, orders.id, ${eventType}
       FROM orders
       WHERE orders.id = ${id}
       ON CONFLICT (stripe_event_id) DO NOTHING
       RETURNING order_id
+    ), updated_order AS (
+      UPDATE orders
+      SET
+        order_status = 'PAID',
+        payment_status = 'PAID',
+        paid_at = COALESCE(paid_at, NOW()),
+        updated_at = NOW(),
+        stripe_checkout_session_id = ${stripeCheckoutSessionId},
+        stripe_payment_intent_id = COALESCE(${stripePaymentIntentId ?? null}, stripe_payment_intent_id)
+      WHERE id IN (SELECT order_id FROM recorded_event)
+      RETURNING id
     )
-    UPDATE orders
-    SET
-      order_status = 'PAID',
-      payment_status = 'PAID',
-      paid_at = COALESCE(paid_at, NOW()),
-      updated_at = NOW(),
-      stripe_checkout_session_id = ${stripeCheckoutSessionId},
-      stripe_payment_intent_id = COALESCE(${stripePaymentIntentId ?? null}, stripe_payment_intent_id)
-    WHERE id IN (SELECT order_id FROM recorded_event)
+    INSERT INTO order_email_notifications (order_id, recipient_group, recipient_email)
+    SELECT updated_order.id, recipient.recipient_group, recipient.email
+    FROM updated_order
+    JOIN email_notification_recipients AS recipient ON recipient.enabled = TRUE
+    JOIN email_notification_groups AS recipient_group ON recipient_group.recipient_group = recipient.recipient_group AND recipient_group.enabled = TRUE
+    WHERE recipient.recipient_group <> 'BAR'
+       OR EXISTS (
+         SELECT 1 FROM order_items
+         WHERE order_items.order_id = updated_order.id
+           AND (order_items.product_id LIKE 'drinks:%' OR order_items.product_id LIKE 'wines:%')
+       )
+    ON CONFLICT (order_id, recipient_group, recipient_email) DO NOTHING
   `;
 
   return getOrder(id);
