@@ -1,8 +1,18 @@
 import { redirect } from "next/navigation";
-import { EmailNotificationSettingsDashboard } from "@/components/admin/EmailNotificationSettingsDashboard";
 import { requireAdminUser } from "@/lib/staff-auth";
 
+export const dynamic = "force-dynamic";
+
 export default async function EmailNotificationSettingsPage() {
-  if (!(await requireAdminUser())) redirect("/admin/login");
-  return <EmailNotificationSettingsDashboard />;
+  let isAdmin = false;
+
+  try {
+    isAdmin = Boolean(await requireAdminUser());
+  } catch {
+    redirect("/admin/login");
+  }
+
+  if (!isAdmin) redirect("/admin/login");
+
+  redirect("/admin");
 }
