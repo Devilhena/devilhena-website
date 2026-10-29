@@ -16,12 +16,15 @@ function isApprovedProductionSiteUrl() {
  */
 export function currentVercelPreviewOrigin(request: Request) {
   if (process.env.VERCEL_ENV !== "preview") return undefined;
-  const deploymentHost = process.env.VERCEL_URL?.trim().toLowerCase();
-  if (!deploymentHost || !/^[a-z0-9](?:[a-z0-9-]{0,251}[a-z0-9])?\.vercel\.app$/.test(deploymentHost)) return undefined;
+  const approvedHosts = [process.env.VERCEL_URL, process.env.VERCEL_BRANCH_URL]
+    .map((host) => host?.trim().toLowerCase())
+    .filter((host): host is string => typeof host === "string" && /^[a-z0-9](?:[a-z0-9-]{0,251}[a-z0-9])?\.vercel\.app$/.test(host));
+  if (!approvedHosts.length) return undefined;
   try {
     const requestUrl = new URL(request.url);
-    if (requestUrl.protocol !== "https:" || requestUrl.hostname.toLowerCase() !== deploymentHost || requestUrl.port || requestUrl.username || requestUrl.password) return undefined;
-    return `https://${deploymentHost}`;
+    const requestHost = requestUrl.hostname.toLowerCase();
+    if (requestUrl.protocol !== "https:" || !approvedHosts.includes(requestHost) || requestUrl.port || requestUrl.username || requestUrl.password) return undefined;
+    return `https://${requestHost}`;
   } catch {
     return undefined;
   }
