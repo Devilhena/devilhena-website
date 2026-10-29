@@ -15,12 +15,10 @@ export default function PortalPage() {
           <Link href="/staff/login" className="focus-ring rounded-2xl border border-earth/20 bg-cream/70 p-6 transition hover:-translate-y-0.5">
             <p className="eyebrow">Restaurant team</p>
             <h2 className="mt-3 font-display text-3xl">Staff login</h2>
-            <p className="mt-3 text-sm leading-6 text-forest/70">View and manage verified restaurant orders.</p>
           </Link>
           <Link href="/admin/login" className="focus-ring rounded-2xl bg-forest p-6 text-cream transition hover:-translate-y-0.5">
             <p className="text-xs font-semibold uppercase tracking-[.18em] text-clay">Restaurant administration</p>
             <h2 className="mt-3 font-display text-3xl">Admin login</h2>
-            <p className="mt-3 text-sm leading-6 text-cream/75">Manage orders, staff, and email notifications in one dashboard.</p>
           </Link>
         </div>
       </section>
