@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless";
+import { assertPreviewDatabaseAccess } from "@/lib/preview-deployment-guard";
 
 /**
  * Creates a database client only when a server-side request needs it.
@@ -11,5 +12,6 @@ export function getDatabase() {
     throw new Error("Database is not configured.");
   }
 
+  assertPreviewDatabaseAccess(connectionString);
   return neon(connectionString);
 }

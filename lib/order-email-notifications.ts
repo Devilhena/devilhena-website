@@ -1,5 +1,6 @@
 import { getDatabase } from "@/lib/db";
 import { getOrder, type RestaurantOrder } from "@/lib/orders";
+import { assertPreviewEmailDeliveryAccess } from "@/lib/preview-deployment-guard";
 
 export const emailRecipientGroups = ["MANAGEMENT", "KITCHEN", "BAR"] as const;
 export type EmailRecipientGroup = (typeof emailRecipientGroups)[number];
@@ -76,6 +77,7 @@ function emailBody(order: RestaurantOrder, group: EmailRecipientGroup) {
 }
 
 function configuredSender() {
+  assertPreviewEmailDeliveryAccess();
   const apiKey = process.env.RESEND_API_KEY;
   const from = process.env.ORDER_NOTIFICATION_FROM_EMAIL;
   if (!apiKey || !from) throw new Error("Email notification delivery is not configured.");
