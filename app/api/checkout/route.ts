@@ -24,16 +24,22 @@ export async function POST(request: NextRequest) {
   if (verifiedItems.some(item => !item.product)) return NextResponse.json({ error: "One or more menu items are unavailable." }, { status: 400 });
   const lines = verifiedItems.map(({ product, quantity }) => ({ productId: product!.id, name: product!.name, category: product!.category, quantity, unitPriceInCents: product!.priceInCents, totalInCents: product!.priceInCents * quantity }));
   const totalInCents = lines.reduce((total, item) => total + item.totalInCents, 0);
+  let checkoutStage = "origin-validation";
   try {
     const origin = getApprovedCheckoutOrigin(request);
+    checkoutStage = "order-creation";
     const order = await createPendingOrder({ items: lines, totalInCents, delivery: parsed.data.delivery as DeliveryDetails });
+    checkoutStage = "stripe-configuration";
     const stripe = getStripe();
+    checkoutStage = "stripe-session-creation";
     const session = await stripe.checkout.sessions.create({ mode: "payment", payment_method_types: ["card"], line_items: lines.map(item => ({ quantity: item.quantity, price_data: { currency: "eur", unit_amount: item.unitPriceInCents, product_data: { name: item.name } } })), metadata: { orderId: order.id }, success_url: `${origin}/order/success?order_id=${order.id}`, cancel_url: `${origin}/order/cancel?order_id=${order.id}` });
+    checkoutStage = "checkout-session-persistence";
     await setCheckoutSession(order.id, session.id);
     if (!session.url) throw new Error("Stripe did not return a checkout URL.");
     return NextResponse.json({ url: session.url });
   } catch (error) {
-    logServerFailure("checkout.create-session", error);
+    const route = process.env.VERCEL_ENV === "preview" ? `checkout.create-session.${checkoutStage}` : "checkout.create-session";
+    logServerFailure(route, error);
     return NextResponse.json({ error: "Unable to start payment. Please try again later." }, { status: 503 });
   }
 }
