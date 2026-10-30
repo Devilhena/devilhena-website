@@ -99,7 +99,7 @@ export function EmailNotificationSettingsDashboard() {
     <section className="py-8">
       <header>
         <p className="eyebrow">Settings</p>
-        <h1 className="mt-3 font-display text-3xl sm:text-4xl">Email <i className="text-earth">Notifications.</i></h1>
+        <h2 className="mt-3 font-display text-3xl sm:text-4xl">Email <i className="text-earth">Notifications.</i></h2>
         <p className="mt-3 max-w-2xl text-sm leading-6 text-forest/70">Recipients receive messages only after Stripe has verified a paid order. Saving changes affects future orders only.</p>
       </header>
 

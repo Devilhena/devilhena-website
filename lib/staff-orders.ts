@@ -20,7 +20,7 @@ type OrderRow = {
 };
 type ItemRow = { product_id: string; product_name: string; category: string; quantity: number; unit_price_cents: number; line_total_cents: number };
 
-export type StaffOrderFilters = { status?: RestaurantStatus; payment?: StaffPaymentStatus; search?: string; date?: string; page?: number };
+export type StaffOrderFilters = { status?: RestaurantStatus; payment?: StaffPaymentStatus; search?: string; date?: string; page?: number; pageSize?: number; activeOnly?: boolean; historyOnly?: boolean };
 
 const asIso = (value: string | Date) => new Date(value).toISOString();
 const activeStatuses: RestaurantStatus[] = ["NEW", "ACCEPTED", "PREPARING", "READY"];
@@ -37,7 +37,7 @@ function mapOrder(row: OrderRow, items: ItemRow[]): StaffOrder {
 
 export async function listStaffOrders(filters: StaffOrderFilters = {}) {
   const sql = getDatabase();
-  const limit = 30;
+  const limit = Math.max(1, Math.min(filters.pageSize || 30, 100));
   const page = Math.max(1, Math.min(filters.page || 1, 10000));
   const offset = (page - 1) * limit;
   const status = filters.status ?? null;
@@ -45,6 +45,8 @@ export async function listStaffOrders(filters: StaffOrderFilters = {}) {
   const date = filters.date ?? null;
   const search = filters.search?.trim().slice(0, 80) || null;
   const pattern = search ? `%${search}%` : null;
+  const activeOnly = Boolean(filters.activeOnly);
+  const historyOnly = Boolean(filters.historyOnly);
   const rows = await sql`
     SELECT id, order_number, created_at, paid_at, restaurant_status, payment_status, customer_name, customer_phone, customer_email,
       delivery_type, floor, room, pool_location_details, customer_notes, total_amount_cents, stripe_checkout_session_id, stripe_payment_intent_id
@@ -53,6 +55,8 @@ export async function listStaffOrders(filters: StaffOrderFilters = {}) {
       AND (${payment}::text IS NULL OR payment_status = ${payment})
       AND (${date}::text IS NULL OR (created_at AT TIME ZONE 'Europe/Malta')::date = ${date}::date)
       AND (${pattern}::text IS NULL OR order_number ILIKE ${pattern} OR COALESCE(room, '') ILIKE ${pattern})
+      AND (${activeOnly}::boolean = false OR restaurant_status IN ('NEW', 'ACCEPTED', 'PREPARING', 'READY'))
+      AND (${historyOnly}::boolean = false OR restaurant_status IN ('DELIVERED', 'CANCELLED'))
     ORDER BY
       CASE WHEN restaurant_status IN ('NEW', 'ACCEPTED', 'PREPARING', 'READY') THEN 0 ELSE 1 END ASC,
       CASE WHEN restaurant_status IN ('NEW', 'ACCEPTED', 'PREPARING', 'READY') THEN created_at END ASC NULLS LAST,
@@ -65,12 +69,82 @@ export async function listStaffOrders(filters: StaffOrderFilters = {}) {
       AND (${payment}::text IS NULL OR payment_status = ${payment})
       AND (${date}::text IS NULL OR (created_at AT TIME ZONE 'Europe/Malta')::date = ${date}::date)
       AND (${pattern}::text IS NULL OR order_number ILIKE ${pattern} OR COALESCE(room, '') ILIKE ${pattern})
+      AND (${activeOnly}::boolean = false OR restaurant_status IN ('NEW', 'ACCEPTED', 'PREPARING', 'READY'))
+      AND (${historyOnly}::boolean = false OR restaurant_status IN ('DELIVERED', 'CANCELLED'))
   ` as { total: number }[];
   const orders = await Promise.all(rows.map(async (row) => {
     const items = await sql`SELECT product_id, product_name, category, quantity, unit_price_cents, line_total_cents FROM order_items WHERE order_id = ${row.id} ORDER BY id` as ItemRow[];
     return mapOrder(row, items);
   }));
   return { orders, page, pageSize: limit, total: Number(countRows[0]?.total || 0) };
+}
+
+export type ReadOnlyStaffLiveOrder = {
+  orderNumber: string;
+  createdAt: string;
+  restaurantStatus: RestaurantStatus;
+  deliveryType: StaffOrder["deliveryType"];
+  floor?: string;
+  room?: string;
+  poolLocationDetails?: string;
+  customerNotes?: string;
+  items: Array<Pick<OrderLine, "name" | "quantity">>;
+};
+
+export type AdminLiveOrder = Omit<StaffOrder, "stripeCheckoutSessionId" | "stripePaymentIntentId">;
+
+export type AdminOrderHistoryOrder = Pick<
+  StaffOrder,
+  "id" | "orderNumber" | "createdAt" | "restaurantStatus" | "deliveryType" | "floor" | "room" | "poolLocationDetails" | "customerNotes" | "totalInCents"
+> & {
+  items: Array<Pick<OrderLine, "name" | "quantity">>;
+};
+
+function toAdminLiveOrder(order: StaffOrder): AdminLiveOrder {
+  const { stripeCheckoutSessionId: _stripeCheckoutSessionId, stripePaymentIntentId: _stripePaymentIntentId, ...safeOrder } = order;
+  return safeOrder;
+}
+
+export async function listReadOnlyStaffLiveOrders() {
+  const result = await listStaffOrders({ activeOnly: true, payment: "PAID", pageSize: 100 });
+
+  return result.orders
+    .map<ReadOnlyStaffLiveOrder>((order) => ({
+      orderNumber: order.orderNumber,
+      createdAt: order.createdAt,
+      restaurantStatus: order.restaurantStatus,
+      deliveryType: order.deliveryType,
+      ...(order.floor ? { floor: order.floor } : {}),
+      ...(order.room ? { room: order.room } : {}),
+      ...(order.poolLocationDetails ? { poolLocationDetails: order.poolLocationDetails } : {}),
+      ...(order.customerNotes ? { customerNotes: order.customerNotes } : {}),
+      items: order.items.map((item) => ({ name: item.name, quantity: item.quantity })),
+    }));
+}
+
+export async function listAdminLiveOrders() {
+  const result = await listStaffOrders({ activeOnly: true, payment: "PAID", pageSize: 100 });
+  return { ...result, orders: result.orders.map(toAdminLiveOrder) };
+}
+
+export async function listAdminOrderHistory(page: number) {
+  const result = await listStaffOrders({ historyOnly: true, page });
+  return {
+    ...result,
+    orders: result.orders.map<AdminOrderHistoryOrder>((order) => ({
+      id: order.id,
+      orderNumber: order.orderNumber,
+      createdAt: order.createdAt,
+      restaurantStatus: order.restaurantStatus,
+      deliveryType: order.deliveryType,
+      ...(order.floor ? { floor: order.floor } : {}),
+      ...(order.room ? { room: order.room } : {}),
+      ...(order.poolLocationDetails ? { poolLocationDetails: order.poolLocationDetails } : {}),
+      ...(order.customerNotes ? { customerNotes: order.customerNotes } : {}),
+      totalInCents: order.totalInCents,
+      items: order.items.map((item) => ({ name: item.name, quantity: item.quantity })),
+    })),
+  };
 }
 
 export async function getStaffSummary() {

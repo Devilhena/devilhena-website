@@ -34,7 +34,7 @@ export async function getAuthenticatedUser() {
   const sql = getDatabase(); const rows = await sql`SELECT id, full_name, email, password_hash, role, account_status, created_at, approved_at FROM staff_users WHERE id = ${session.userId} LIMIT 1` as UserRow[]; const row = rows[0];
   return row?.account_status === "APPROVED" && secureValueEqual(session.credentialVersion, credentialVersionForPasswordHash(row.password_hash)) ? serializeUser(row) : undefined;
 }
-export async function requireStaffUser() { return getAuthenticatedUser(); }
+export async function requireStaffUser() { const user = await getAuthenticatedUser(); return user?.role === "STAFF" ? user : undefined; }
 export async function requireAdminUser() { const user = await getAuthenticatedUser(); return user?.role === "ADMIN" ? user : undefined; }
 export function authenticatedSessionCookie(user: Pick<StaffUser, "id" | "credentialVersion">) { return { name: sessionCookieName, value: createCredentialSessionToken(user.id, user.credentialVersion), options: { httpOnly: true, sameSite: "lax" as const, secure: process.env.NODE_ENV === "production", path: "/", maxAge: sessionLifetimeSeconds } }; }
 export const expiredStaffSessionCookie = { name: sessionCookieName, value: "", options: { httpOnly: true, sameSite: "lax" as const, secure: process.env.NODE_ENV === "production", path: "/", maxAge: 0 } };
