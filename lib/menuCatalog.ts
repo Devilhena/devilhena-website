@@ -1,4 +1,5 @@
-import { drinks, food, wines } from "@/data/officialMenu";
+import { drinks, wines } from "@/data/officialMenu";
+import { food } from "@/data/activeFoodMenu";
 
 type CatalogProduct = { id: string; name: string; priceInCents: number; category: string };
 
