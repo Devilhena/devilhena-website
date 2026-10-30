@@ -3,9 +3,9 @@
 import { BellRing, LoaderCircle, LogOut, MapPin, RefreshCw, Square, Upload, UtensilsCrossed, Volume2, VolumeX } from "lucide-react";
 import { ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { ReadOnlyStaffLiveOrder, RestaurantStatus } from "@/lib/staff-orders";
+import type { RestaurantStatus, StaffLiveOrder } from "@/lib/staff-orders";
 
-type Data = { orders: ReadOnlyStaffLiveOrder[] };
+type Data = { orders: StaffLiveOrder[] };
 
 const ringtoneNameKey = "dv-order-ringtone-name";
 const ringtoneDatabase = "de-vilhena-staff";
@@ -81,7 +81,7 @@ async function storeRingtone(file: File) {
   }
 }
 
-function DeliveryDetails({ order }: { order: ReadOnlyStaffLiveOrder }) {
+function DeliveryDetails({ order }: { order: StaffLiveOrder }) {
   if (order.deliveryType === "hotel-room") {
     return <p className="mt-2 font-display text-xl">Room {order.room || "—"} <span className="text-sm">· Floor {order.floor || "—"}</span></p>;
   }
@@ -101,6 +101,7 @@ export function StaffOrdersView() {
   const [ringingOrderNumbers, setRingingOrderNumbers] = useState<string[]>([]);
   const [ringtoneName, setRingtoneName] = useState("");
   const [ringtoneError, setRingtoneError] = useState("");
+  const [updating, setUpdating] = useState("");
   const seenOrderNumbers = useRef(new Set<string>());
   const initialized = useRef(false);
   const audio = useRef<HTMLAudioElement | undefined>(undefined);
@@ -172,7 +173,7 @@ export function StaffOrdersView() {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || "Unable to load current orders.");
       setData(payload);
-      handleNotifications((payload.orders || []).filter((order: ReadOnlyStaffLiveOrder) => order.restaurantStatus === "NEW").map((order: ReadOnlyStaffLiveOrder) => order.orderNumber));
+      handleNotifications((payload.orders || []).filter((order: StaffLiveOrder) => order.restaurantStatus === "NEW").map((order: StaffLiveOrder) => order.orderNumber));
       setError("");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to load current orders.");
@@ -229,6 +230,24 @@ export function StaffOrdersView() {
     setRingtoneError("Choose an MP3 file up to 8 MB.");
   }
 
+  async function updateStatus(id: string, status: "ACCEPTED" | "DELIVERED" | "CANCELLED") {
+    setUpdating(id);
+    try {
+      const response = await fetch("/api/staff/orders/" + id + "/status", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Unable to update order.");
+      await load(true);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to update order.");
+    } finally {
+      setUpdating("");
+    }
+  }
+
   async function logout() {
     await fetch("/api/staff/auth/logout", { method: "POST" });
     router.replace("/staff/login");
@@ -242,7 +261,7 @@ export function StaffOrdersView() {
           <div>
             <p className="eyebrow">De Vilhena Bistrot</p>
             <h1 className="mt-3 font-display text-4xl sm:text-5xl">Current <i className="text-earth">orders.</i></h1>
-            <p className="mt-3 text-sm text-forest/65">Verified paid orders only · no order actions · Malta time</p>
+            <p className="mt-3 text-sm text-forest/65">Accept or reject new paid orders, then mark them delivered · Malta time</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <label className="focus-ring inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-full border border-earth/25 px-4 text-xs font-semibold tracking-[.12em] text-forest">
@@ -280,7 +299,7 @@ export function StaffOrdersView() {
 
         <section className="mt-4 grid gap-4 lg:grid-cols-2">
           {data?.orders.map((order) => (
-            <article key={order.orderNumber} className="rounded-[1.5rem] border border-earth/15 bg-cream/75 p-5 shadow-sm sm:p-6">
+            <article key={order.id} className="rounded-[1.5rem] border border-earth/15 bg-cream/75 p-5 shadow-sm sm:p-6">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <span className={"rounded-full px-3 py-1 text-[10px] font-bold tracking-[.14em] " + statusTone[order.restaurantStatus]}>{order.restaurantStatus}</span>
@@ -301,6 +320,23 @@ export function StaffOrdersView() {
                   {order.items.map((item) => <li key={item.name} className="flex gap-3"><span className="font-semibold">{item.quantity} ×</span><span>{item.name}</span></li>)}
                 </ul>
                 {order.customerNotes && <p className="mt-4 border-l-2 border-earth/40 pl-3 text-sm leading-6 text-forest/75"><strong>Notes:</strong> {order.customerNotes}</p>}
+              </div>
+              <div className="mt-6 flex flex-wrap gap-3">
+                {order.restaurantStatus === "NEW" && (
+                  <>
+                    <button disabled={updating === order.id} onClick={() => void updateStatus(order.id, "ACCEPTED")} className="focus-ring min-h-11 rounded-full bg-forest px-5 py-3 text-xs font-semibold tracking-[.13em] text-cream transition hover:bg-earth disabled:opacity-45">
+                      {updating === order.id ? "UPDATING…" : "ACCEPT ORDER"}
+                    </button>
+                    <button disabled={updating === order.id} onClick={() => void updateStatus(order.id, "CANCELLED")} className="focus-ring min-h-11 rounded-full border border-red-300 px-5 py-3 text-xs font-semibold tracking-[.13em] text-red-700 disabled:opacity-45">
+                      REJECT ORDER
+                    </button>
+                  </>
+                )}
+                {["ACCEPTED", "PREPARING", "READY"].includes(order.restaurantStatus) && (
+                  <button disabled={updating === order.id} onClick={() => void updateStatus(order.id, "DELIVERED")} className="focus-ring min-h-11 rounded-full bg-forest px-5 py-3 text-xs font-semibold tracking-[.13em] text-cream transition hover:bg-earth disabled:opacity-45">
+                    {updating === order.id ? "UPDATING…" : "MARK DELIVERED"}
+                  </button>
+                )}
               </div>
             </article>
           ))}

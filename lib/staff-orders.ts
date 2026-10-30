@@ -79,7 +79,8 @@ export async function listStaffOrders(filters: StaffOrderFilters = {}) {
   return { orders, page, pageSize: limit, total: Number(countRows[0]?.total || 0) };
 }
 
-export type ReadOnlyStaffLiveOrder = {
+export type StaffLiveOrder = {
+  id: string;
   orderNumber: string;
   createdAt: string;
   restaurantStatus: RestaurantStatus;
@@ -105,11 +106,12 @@ function toAdminLiveOrder(order: StaffOrder): AdminLiveOrder {
   return safeOrder;
 }
 
-export async function listReadOnlyStaffLiveOrders() {
+export async function listStaffLiveOrders() {
   const result = await listStaffOrders({ activeOnly: true, payment: "PAID", pageSize: 100 });
 
   return result.orders
-    .map<ReadOnlyStaffLiveOrder>((order) => ({
+    .map<StaffLiveOrder>((order) => ({
+      id: order.id,
       orderNumber: order.orderNumber,
       createdAt: order.createdAt,
       restaurantStatus: order.restaurantStatus,
@@ -165,15 +167,16 @@ export async function getStaffSummary() {
   return { newOrders: Number(row.new_orders || 0), activeOrders: Number(row.active_orders || 0), completedToday: Number(row.completed_today || 0), paidOrdersToday: Number(row.paid_orders_today || 0), paidSalesToday: Number(row.paid_sales_today || 0), preparingOrders: Number(row.preparing_orders || 0), readyOrders: Number(row.ready_orders || 0), deliveredToday: Number(row.delivered_today || 0) };
 }
 
-export async function getNewPaidOrderIds() {
-  const sql = getDatabase();
-  const rows = await sql`SELECT id FROM orders WHERE restaurant_status = 'NEW' AND payment_status = 'PAID' ORDER BY created_at DESC LIMIT 50` as { id: string }[];
-  return rows.map((row) => row.id);
-}
-
 export class StaffOrderError extends Error { constructor(message: string, readonly statusCode: number) { super(message); } }
 
-const transitions: Record<RestaurantStatus, RestaurantStatus[]> = { NEW: ["ACCEPTED", "CANCELLED"], ACCEPTED: ["PREPARING", "CANCELLED"], PREPARING: ["READY", "CANCELLED"], READY: ["DELIVERED", "CANCELLED"], DELIVERED: [], CANCELLED: [] };
+const transitions: Record<RestaurantStatus, RestaurantStatus[]> = {
+  NEW: ["ACCEPTED", "CANCELLED"],
+  ACCEPTED: ["DELIVERED"],
+  PREPARING: ["DELIVERED"],
+  READY: ["DELIVERED"],
+  DELIVERED: [],
+  CANCELLED: [],
+};
 
 export async function updateRestaurantStatus(id: string, nextStatus: RestaurantStatus) {
   const sql = getDatabase();
