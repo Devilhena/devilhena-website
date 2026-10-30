@@ -163,30 +163,85 @@ export async function setCheckoutSession(id: string, stripeCheckoutSessionId: st
   `;
 }
 
-export async function markOrderPaid(id: string, eventId: string, stripeCheckoutSessionId: string, stripePaymentIntentId?: string) {
+export type VerifiedStripeCheckoutPayment = {
+  orderId: string;
+  eventId: string;
+  eventType: "checkout.session.completed" | "checkout.session.async_payment_succeeded";
+  stripeCheckoutSessionId: string;
+  stripePaymentIntentId?: string;
+  amountTotalInCents: number;
+  currency: "eur";
+};
+
+export type MarkOrderPaidResult = {
+  markedPaid: boolean;
+  queuedNotificationCount: number;
+};
+
+export async function markOrderPaid(payment: VerifiedStripeCheckoutPayment) {
   const sql = getDatabase();
 
-  // Stripe retries webhooks. Inserting the Stripe event in this query makes
-  // repeated deliveries idempotent while the order update stays atomic.
-  await sql`
-    WITH recorded_event AS (
+  // A Stripe event is useful only when it still binds to the exact Checkout
+  // Session and server-calculated total saved for this pending order. The
+  // update happens before the event is recorded, so a concurrent update can
+  // never leave a pending order with a permanently deduplicated event ID.
+  const result = await sql`
+    WITH updated_order AS (
+      UPDATE orders
+      SET
+        order_status = 'PAID',
+        payment_status = 'PAID',
+        paid_at = COALESCE(paid_at, NOW()),
+        updated_at = NOW(),
+        stripe_payment_intent_id = COALESCE(orders.stripe_payment_intent_id, ${payment.stripePaymentIntentId ?? null})
+      WHERE orders.id = ${payment.orderId}
+        AND orders.order_status = 'PENDING_PAYMENT'
+        AND orders.payment_status = 'PENDING'
+        AND orders.stripe_checkout_session_id = ${payment.stripeCheckoutSessionId}
+        AND orders.total_amount_cents = ${payment.amountTotalInCents}
+        AND ${payment.currency} = 'eur'
+        AND (
+          orders.stripe_payment_intent_id IS NULL
+          OR orders.stripe_payment_intent_id = ${payment.stripePaymentIntentId ?? null}
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM stripe_webhook_events
+          WHERE stripe_event_id = ${payment.eventId}
+        )
+      RETURNING orders.id
+    ),
+    recorded_event AS (
       INSERT INTO stripe_webhook_events (stripe_event_id, order_id, event_type)
-      SELECT ${eventId}, orders.id, 'checkout.session.completed'
-      FROM orders
-      WHERE orders.id = ${id}
+      SELECT ${payment.eventId}, updated_order.id, ${payment.eventType}
+      FROM updated_order
       ON CONFLICT (stripe_event_id) DO NOTHING
       RETURNING order_id
+    ),
+    queued_notifications AS (
+      INSERT INTO order_email_notifications (order_id, recipient_group, recipient_email, status, available_at)
+      SELECT
+        recorded_event.order_id,
+        recipient.recipient_group,
+        recipient.email,
+        'PENDING',
+        NOW()
+      FROM recorded_event
+      JOIN email_notification_recipients AS recipient ON recipient.enabled = TRUE
+      JOIN email_notification_groups AS recipient_group
+        ON recipient_group.recipient_group = recipient.recipient_group
+        AND recipient_group.enabled = TRUE
+      ON CONFLICT (order_id, recipient_group, recipient_email) DO NOTHING
+      RETURNING order_id
     )
-    UPDATE orders
-    SET
-      order_status = 'PAID',
-      payment_status = 'PAID',
-      paid_at = COALESCE(paid_at, NOW()),
-      updated_at = NOW(),
-      stripe_checkout_session_id = ${stripeCheckoutSessionId},
-      stripe_payment_intent_id = COALESCE(${stripePaymentIntentId ?? null}, stripe_payment_intent_id)
-    WHERE id IN (SELECT order_id FROM recorded_event)
+    SELECT
+      EXISTS (SELECT 1 FROM recorded_event) AS marked_paid,
+      (SELECT COUNT(*)::int FROM queued_notifications) AS queued_count
   `;
 
-  return getOrder(id);
+  const markedPaid = result[0]?.marked_paid === true;
+  return {
+    markedPaid,
+    queuedNotificationCount: Number(result[0]?.queued_count ?? 0),
+  } satisfies MarkOrderPaidResult;
 }
